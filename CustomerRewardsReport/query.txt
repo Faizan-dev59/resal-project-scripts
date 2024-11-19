@@ -1,0 +1,12 @@
+
+filter query:
+{
+ businessId: ObjectId("63513c0716d2f7001f211c37"),
+ customerId: ObjectId('5f83f36f612c72002c7b167f'),
+  created_at: {
+    $gte: new Date('2023-01-01T00:00:00Z'),
+    $lt: new Date('2023-02-01T00:00:00Z')
+  }
+}
+
+Case 1:  Reward Type Wise:
