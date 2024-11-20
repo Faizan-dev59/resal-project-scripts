@@ -2,8 +2,7 @@ const { MongoClient, ObjectId } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
 
-const uri =
-  "mongodb://vt_admin:7A4J2wANFY6i@ec2-65-1-109-135.ap-south-1.compute.amazonaws.com:27017/boonus?directConnection=true";
+const uri = process.env.DATABASE_URI;
 const client = new MongoClient(uri);
 const dbName = "boonus";
 const collectionName = "transactions";
