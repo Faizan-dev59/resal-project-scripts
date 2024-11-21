@@ -1,32 +1,19 @@
 const { MongoClient, ObjectId } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
+require("dotenv").config();
 
 const uri = process.env.DATABASE_URI;
 const client = new MongoClient(uri);
 const dbName = "boonus";
 const collectionName = "customerloyalties";
-const filePath = path.join(__dirname, "CustomerGeneralReport-2.csv");
-
-const month = {
-  1: "January",
-  2: "February",
-  3: "March",
-  4: "April",
-  5: "May",
-  6: "June",
-  7: "July",
-  8: "August",
-  9: "September",
-  10: "October",
-  11: "November",
-  12: "December",
-};
+const filePath = path.join(__dirname, "CustomerGeneralReport-5.csv");
 
 const pipeline = [
   {
     $match: {
-      businessId: new ObjectId("6329ed73b92ed5001f7ae887"), // Match the specific business ID
+      businessId: new ObjectId("637da7ba3ecf30001fe918b7"), // Match the specific business ID
+      customerId: { $ne: new ObjectId("6655b275fc6868001deef307") },
     },
   },
   {
@@ -67,6 +54,7 @@ const pipeline = [
   {
     $project: {
       _id: 0, // Exclude the `_id` field from the output
+      customerId: { $ifNull: ["$customerInfo._id", "N/A"] },
       firstName: { $ifNull: ["$customerInfo.firstName", "N/A"] },
       lastName: { $ifNull: ["$customerInfo.lastName", "N/A"] },
       birthday: { $ifNull: ["$birthday", "N/A"] },
@@ -81,47 +69,46 @@ const pipeline = [
 ];
 
 async function runAggregationAndSaveToCSV() {
-    try {
-      await client.connect();
-      const db = client.db(dbName);
-      const collection = db.collection(collectionName);
-  
-      // Create write stream
-      const writeStream = fs.createWriteStream(filePath, { flags: "a" });
-      writeStream.write(
-        "First Name,Last Name,Birthday,Gender,Country Code,Phone Number,Joined At,Current Points,Total Points\n"
-      );
-  
-      // Stream results in batches
-      const cursor = collection.aggregate(pipeline, {
-        allowDiskUse: true,
-        batchSize: 10000,
-      });
-  
-      // Await for cursor to process each batch
-      await cursor.forEach((item) => {
-        // Mapping fields from aggregation result to CSV row format
-        const row = `${item.firstName || "N/A"},${item.lastName || "N/A"},${
-          item.birthday || "N/A"
-        },${item.gender || "N/A"},${item.countryCode || "N/A"},${
-          item.number || "N/A"
-        },${item.joinedAt || "N/A"},${item.currentPoints || 0},${
-          item.totalPoints || 0
-        }\n`;
-  
-        // Write the row to the CSV
-        writeStream.write(row);
-      });
-  
-      console.log(`Data successfully saved to ${filePath}`);
-      writeStream.end();
-    } catch (error) {
-      console.error("Error:", error);
-    } finally {
-      await client.close();
-    }
+  try {
+    await client.connect();
+    const db = client.db(dbName);
+    const collection = db.collection(collectionName);
+
+    // Create write stream
+    const writeStream = fs.createWriteStream(filePath, { flags: "a" });
+    writeStream.write(
+      "ID,First Name,Last Name,Birthday,Gender,Country Code,Phone Number,Joined At,Current Points,Total Points\n"
+    );
+
+    // Stream results in batches
+    const cursor = collection.aggregate(pipeline, {
+      allowDiskUse: true,
+      batchSize: 10000,
+    });
+
+    // Await for cursor to process each batch
+    await cursor.forEach((item) => {
+      // Mapping fields from aggregation result to CSV row format
+      const row = `${item.customerId || "N/A"},${item.firstName || "N/A"},${
+        item.lastName || "N/A"
+      },${item.birthday || "N/A"},${item.gender || "N/A"},${
+        item.countryCode || "N/A"
+      },${item.number || "N/A"},${item.joinedAt || "N/A"},${
+        item.currentPoints || 0
+      },${item.totalPoints || 0}\n`;
+
+      // Write the row to the CSV
+      writeStream.write(row);
+    });
+
+    console.log(`Data successfully saved to ${filePath}`);
+    writeStream.end();
+  } catch (error) {
+    console.error("Error:", error);
+  } finally {
+    await client.close();
   }
-  
+}
 
 async function runAggregationAndLog() {
   try {

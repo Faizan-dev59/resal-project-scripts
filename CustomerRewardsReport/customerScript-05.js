@@ -1,18 +1,19 @@
 const { MongoClient, ObjectId } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
+require("dotenv").config();
 
 const uri = process.env.DATABASE_URI;
 const client = new MongoClient(uri);
 const dbName = "boonus";
 const collectionName = "transactions";
-const filePath = path.join(__dirname, "CustomerRewardsReport-4.csv");
+const filePath = path.join(__dirname, "CustomerRewardsReport-5.csv");
 
 const pipeline = [
   {
     $match: {
       businessId: new ObjectId("637da7ba3ecf30001fe918b7"),
-      orderNumber: { $exists: true },
+      customerId: { $ne: new ObjectId("6655b275fc6868001deef307") },
     },
   },
   {
@@ -45,14 +46,6 @@ const pipeline = [
     },
   },
   {
-    $lookup: {
-      from: "businesses",
-      localField: "businessId",
-      foreignField: "_id",
-      as: "businessInfo",
-    },
-  },
-  {
     $addFields: {
       fullName: {
         $cond: {
@@ -75,23 +68,6 @@ const pipeline = [
             ],
           },
         },
-      },
-      transactionDate: {
-        $ifNull: [
-          {
-            $dateToString: {
-              format: "%d-%m-%Y",
-              date: "$created_at", // Directly use the created_at field
-            },
-          },
-          "N/A",
-        ],
-      },
-      businessType: {
-        $ifNull: [{ $arrayElemAt: ["$businessInfo.category", 0] }, "N/A"],
-      },
-      orderNumber: {
-        $ifNull: ["$orderNumber", "N/A"],
       },
       customerId: {
         $ifNull: [{ $arrayElemAt: ["$customerInfo._id", 0] }, "N/A"],
@@ -162,12 +138,6 @@ const pipeline = [
           "N/A",
         ],
       },
-      branchName: {
-        $ifNull: [{ $arrayElemAt: ["$branchInfo.name", 0] }, "N/A"],
-      },
-      cashierEmail: {
-        $ifNull: [{ $arrayElemAt: ["$cashierInfo.email", 0] }, "N/A"],
-      },
       redeemedRewardsCount: {
         $size: {
           $filter: {
@@ -183,19 +153,30 @@ const pipeline = [
       //     $sum: { $cond: [{ $eq: ["$type", "VISIT"] }, 1, 0] },
       //   },
       totalSpending: { $sum: "$amount" }, // Assuming "amount" represents spending
-      totalStampsReached: {
-        $size: {
-          $filter: {
-            input: { $arrayElemAt: ["$customerLoyaltyInfo.serialNumbers", 0] },
-            as: "serial",
-            cond: { $eq: ["$$serial.type", "STAMPS"] },
+      totalNumberOfStamps: {
+        $reduce: {
+          input: {
+            $map: {
+              input: { $ifNull: ["$customerLoyaltyInfo.stampsProgress", []] }, // Ensure it's an array
+              as: "item",
+              in: {
+                $ifNull: [
+                  { $toInt: "$$item.numberOfStamps" }, // Apply $toInt to each element
+                  0, // Default to 0 if the value is not valid
+                ],
+              },
+            },
           },
+          initialValue: 0,
+          in: { $add: ["$$value", "$$this"] },
         },
       },
       currentStamps: {
         $size: {
           $filter: {
-            input: { $arrayElemAt: ["$customerLoyaltyInfo.serialNumbers", 0] },
+            input: {
+              $ifNull: ["$serialNumbers", []],
+            },
             as: "serial",
             cond: { $eq: ["$$serial.type", "STAMPS"] },
           },
@@ -203,12 +184,30 @@ const pipeline = [
       },
       totalStampRewardsClaimed: {
         $sum: {
-          $cond: [{ $eq: ["$customerVouchersInfo.redeemed", true] }, 1, 0],
+          $cond: [
+            {
+              $eq: [
+                { $ifNull: ["$customerVouchersInfo.redeemed", false] },
+                true,
+              ],
+            },
+            1,
+            0,
+          ],
         },
       },
       totalRedeemedStampRewards: {
         $sum: {
-          $cond: [{ $eq: ["$customerVouchersInfo.type", "STAMPS"] }, 1, 0],
+          $cond: [
+            {
+              $eq: [
+                { $ifNull: ["$customerVouchersInfo.type", null] },
+                "STAMPS",
+              ],
+            },
+            1,
+            0,
+          ],
         },
       },
     },
@@ -222,9 +221,7 @@ const pipeline = [
               customerId: "$customerId",
               transactionType: "$type",
             },
-            orderNumber: { $first: "$orderNumber" },
             transactionDate: { $first: "$transactionDate" },
-            businessType: { $first: "$businessType" },
             customerId: { $first: "$customerId" },
             customerJoiningDate: { $first: "$customerJoiningDate" },
             lastVisitDate: { $first: "$lastVisitDate" },
@@ -239,21 +236,22 @@ const pipeline = [
             currentPoints: { $first: "$currentPoints" },
             totalPoints: { $first: "$totalPoints" },
             totalRewardsClaimed: { $sum: "$totalRewardsCount" },
+            totalNumberOfStamps: { $first: "$totalNumberOfStamps" },
             redeemedRewards: { $sum: "$redeemedRewardsCount" },
             totalVisits: { $sum: 1 },
             totalSpending: { $sum: "$amount" }, // Assuming "amount" represents spending
             transactionType: { $first: "$transactionType" },
-            branchName: { $first: "$branchName" },
-            cashierEmail: { $first: "$cashierEmail" },
+            totalStampsReached: { $first: "$totalStampsReached" },
+            currentStamps: { $first: "$currentStamps" },
+            totalRedeemedStampRewards: { $first: "$totalRedeemedStampRewards" },
+            totalStampRewardsClaimed: { $first: "$totalStampRewardsClaimed" },
           },
         },
-
         {
           $project: {
             _id: 0,
             transactionType: "$_id.transactionType",
             orderNumber: 1,
-            transactionDate: 1,
             businessType: 1,
             customerId: 1,
             customerJoiningDate: 1,
@@ -272,8 +270,11 @@ const pipeline = [
             redeemedRewards: 1,
             totalVisits: 1,
             totalSpending: 1,
-            branchName: 1,
-            cashierEmail: 1,
+            totalStampsReached: 1,
+            currentStamps: 1,
+            totalNumberOfStamps: 1,
+            totalRedeemedStampRewards: 1,
+            totalStampRewardsClaimed: 1,
           },
         },
       ],
@@ -295,6 +296,7 @@ const pipeline = [
   {
     $sort: { totalPoints: -1 }, // Example sort by total points
   },
+  { $limit: 20 },
 ];
 
 async function runAggregationAndSaveToCSV() {
@@ -306,7 +308,7 @@ async function runAggregationAndSaveToCSV() {
     // Create write stream
     const writeStream = fs.createWriteStream(filePath, { flags: "a" });
     writeStream.write(
-      "First Name,Last Name,Birthday,Gender,Country Code,Phone Number,Current Points,Join Date,Total Points,Total Rewards,Redeemed Rewards,Total Visits,Total Spending\n"
+      "First Name,Last Name,Birthday,Gender,Country Code,Contact Number,Joined At,Total Number of Stamps Reached,Current No. of Stamps,Total Stamp Rewards Claimed,Total Redeemed Stamp Rewards,Total Visits,Total Spending\n"
     );
 
     // Stream results in batches
@@ -318,7 +320,7 @@ async function runAggregationAndSaveToCSV() {
     // Await for cursor to process each batch
     await cursor.forEach((item) => {
       // Map fields from aggregation result to CSV row format
-      const row = `${item.firstName},${item.lastName},${item.birthday},${item.gender},${item.countryCode},${item.contactNumber},${item.currentPoints},${item.customerJoiningDate},${item.totalPoints},${item.totalRewardsClaimed},${item.redeemedRewards},${item.totalVisits},${item.totalSpending}\n`;
+      const row = `${item.firstName},${item.lastName},${item.birthday},${item.gender},${item.countryCode},${item.contactNumber},${item.customerJoiningDate},${item.totalNumberOfStamps},${item.currentStamps},${item.totalStampRewardsClaimed},${item.totalRedeemedStampRewards},${item.totalVisits},${item.totalSpending}\n`;
 
       // Write the row to the CSV
       writeStream.write(row);
@@ -365,6 +367,6 @@ async function runAggregationAndLog() {
   }
 }
 
-// runAggregationAndLog();
+runAggregationAndLog();
 
-runAggregationAndSaveToCSV();
+// runAggregationAndSaveToCSV();

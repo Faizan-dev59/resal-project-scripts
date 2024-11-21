@@ -1,29 +1,16 @@
 const { MongoClient, ObjectId } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
+require("dotenv").config();
 
 const uri = process.env.DATABASE_URI;
 const client = new MongoClient(uri);
 const dbName = "boonus";
 const collectionName = "transactions";
+const collectionName1 = "customerloyalties";
 const filePath = path.join(__dirname, "CustomerRewardsReport-2.csv");
 
-const month = {
-  1: "January",
-  2: "February",
-  3: "March",
-  4: "April",
-  5: "May",
-  6: "June",
-  7: "July",
-  8: "August",
-  9: "September",
-  10: "October",
-  11: "November",
-  12: "December",
-};
-
-const pipeline = [
+const pipeline1 = [
   {
     $match: {
       businessId: new ObjectId("6329ed73b92ed5001f7ae887"),
@@ -199,11 +186,76 @@ const pipeline = [
   },
 ];
 
+const pipeline2 = [
+  {
+    $match: {
+      businessId: new ObjectId("6329ed73b92ed5001f7ae887"), // Match the specific business ID
+    },
+  },
+  {
+    $lookup: {
+      from: "customers", // Join with the customers collection
+      localField: "customerId",
+      foreignField: "_id",
+      as: "customerInfo",
+    },
+  },
+  {
+    $addFields: {
+      customerId: {
+        $ifNull: [
+          { $toString: { $arrayElemAt: ["$customerInfo._id", 0] } },
+          "N/A",
+        ], // Convert ObjectId to string
+      },
+      customerInfo: { $arrayElemAt: ["$customerInfo", 0] }, // Extract the first (and only) matched customer document
+      birthday: {
+        $ifNull: [
+          {
+            $dateToString: {
+              format: "%d-%m-%Y", // Format: DD-MM-YYYY
+              date: { $arrayElemAt: ["$customerInfo.birthDate", 0] },
+            },
+          },
+          "N/A",
+        ],
+      },
+      customerJoiningDate: {
+        $ifNull: [
+          {
+            $dateToString: {
+              format: "%d-%m-%Y", // Format: DD-MM-YYYY
+              date: { $arrayElemAt: ["$customerInfo.created_at", 0] },
+            },
+          },
+          "N/A",
+        ],
+      },
+    },
+  },
+  {
+    $project: {
+      _id: 0, // Exclude the `_id` field from the output
+      customerId: 1, // customerId is now a string due to $toString
+      firstName: { $ifNull: ["$customerInfo.firstName", "N/A"] },
+      lastName: { $ifNull: ["$customerInfo.lastName", "N/A"] },
+      birthday: { $ifNull: ["$birthday", "N/A"] },
+      gender: { $ifNull: ["$customerInfo.gender", "N/A"] },
+      countryCode: { $ifNull: ["$customerInfo.phone.countryCode", "N/A"] },
+      number: { $ifNull: ["$customerInfo.phone.number", "N/A"] },
+      joinedAt: { $ifNull: ["$customerJoiningDate", "N/A"] },
+      currentPoints: { $ifNull: ["$points", 0] },
+      totalPoints: { $ifNull: ["$totalPoints", 0] },
+    },
+  },
+];
+
 async function runAggregationAndSaveToCSV() {
   try {
     await client.connect();
     const db = client.db(dbName);
     const collection = db.collection(collectionName);
+    const collection2 = db.collection(collectionName1);
 
     // Create write stream
     const writeStream = fs.createWriteStream(filePath, { flags: "a" });
@@ -211,16 +263,38 @@ async function runAggregationAndSaveToCSV() {
       "First Name,Last Name,Birthday,Gender,Country Code,Contact Number,Joined At,Current Points,Total Points,Total Rewards Claimed,Redemption Count,Total Visits,Total Spending\n"
     );
 
-    // Stream results in batches
-    const cursor = collection.aggregate(pipeline, {
-      allowDiskUse: true,
-      batchSize: 10000,
-    });
+    // Run the aggregation and collect the results into an array for the first collection
+    const results = await collection2
+      .aggregate(pipeline2, {
+        allowDiskUse: true,
+        batchSize: 10000,
+      })
+      .toArray(); // Use toArray to fetch all the results
 
-    // Await for cursor to process each batch
-    await cursor.forEach((item) => {
+    // Run the aggregation for the second collection and collect the results
+    const results2 = await collection
+      .aggregate(pipeline1, {
+        allowDiskUse: true,
+        batchSize: 10000,
+      })
+      .toArray(); // Fetch all items from collection2
+
+    // Map through the results and write to CSV
+    results?.forEach((item, index) => {
+      const pipelineResult2 = results2?.find(
+        (res) => item?.customerId === res?.customerId.toString()
+      );
+
       // Mapping fields from aggregation result to CSV row format
-      const row = `${item.firstName},${item.lastName},${item.birthday},${item.gender},${item.countryCode},${item.contactNumber},${item.customerJoiningDate},${item.currentPoints},${item.totalPoints},${item.totalRewardsClaimed},${item.redeemedRewards},${item.totalVisits},${item.totalSpending}\n`;
+      const row = `${item.firstName},${item.lastName},${item.birthday},${
+        item.gender
+      },${item.countryCode},${item.number},${item.joinedAt},${
+        item.currentPoints
+      },${item.totalPoints},${pipelineResult2?.totalRewardsClaimed || 0},${
+        pipelineResult2?.redeemedRewards || 0
+      },${pipelineResult2?.totalVisits || 0},${
+        pipelineResult2?.totalSpending || 0
+      }\n`;
 
       // Write the row to the CSV
       writeStream.write(row);
@@ -240,23 +314,61 @@ async function runAggregationAndLog() {
     await client.connect();
     const db = client.db(dbName);
     const collection = db.collection(collectionName);
+    const collection2 = db.collection(collectionName1);
 
-    // Run the aggregation and collect the results into an array
-    const results = await collection
-      .aggregate(pipeline, {
+    // Run the aggregation and collect the results into an array for the first collection
+    const results = await collection2
+      .aggregate(pipeline2, {
         allowDiskUse: true,
         batchSize: 10000,
       })
       .toArray(); // Use toArray to fetch all the results
 
-    console.log("Aggregation Pipeline Results:");
-    // Log the aggregation results
-    console.log(JSON.stringify(results, null, 2)); // This will print the results nicely formatted
+    // // Log all items from collection2
+    const results2 = await collection
+      .aggregate(pipeline1, {
+        allowDiskUse: true,
+        batchSize: 10000,
+      })
+      .toArray(); // Fetch all items from collection2
 
-    // You can also log specific fields for easier readability if you prefer:
-    results.forEach((item, index) => {
-      console.log(`Record #${index + 1}:`);
-      console.log(item);
+    results?.map((item, index) => {
+      const pipelineResult2 = results2?.find((res) => {
+        item?.customerId === res?.customerId.toString();
+      });
+      console.log(`Record #${index + 1} from Collection:`);
+      console.log({
+        customerId: item?.customerId,
+        firstName: item?.firstName,
+        lastName: item?.lastName,
+        birthday: item?.birthday,
+        gender: item?.gender,
+        countryCode: item?.countryCode,
+        number: item?.number,
+        joinedAt: item?.customerJoiningDate,
+        currentPoints: item?.currentPoints,
+        totalPoints: item?.totalPoints,
+        totalRewardsClaimed: pipelineResult2?.totalRewardsClaimed || 0,
+        redeemedRewards: pipelineResult2?.redeemedRewards || 0,
+        totalVisits: pipelineResult2?.totalVisits || 0,
+        totalSpending: pipelineResult2?.totalSpending || 0,
+      });
+      return {
+        customerId: item?.customerId,
+        firstName: item?.firstName,
+        lastName: item?.lastName,
+        birthday: item?.birthday,
+        gender: item?.gender,
+        countryCode: item?.countryCode,
+        number: item?.number,
+        joinedAt: item?.customerJoiningDate,
+        currentPoints: item?.currentPoints,
+        totalPoints: item?.totalPoints,
+        totalRewardsClaimed: pipelineResult2?.totalRewardsClaimed || 0,
+        redeemedRewards: pipelineResult2?.redeemedRewards || 0,
+        totalVisits: pipelineResult2?.totalVisits || 0,
+        totalSpending: pipelineResult2?.totalSpending || 0,
+      };
     });
 
     console.log("Aggregation completed successfully.");
